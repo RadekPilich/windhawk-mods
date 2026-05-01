@@ -2,10 +2,10 @@
 // @id              simple-scheduler
 // @name            Simple Scheduler
 // @description     Schedule hibernation, sleep, shutdown, program runs, notifications, screen state, and volume by time and day/date.
-// @version         1.4.0
+// @version         1.4.1
 // @author          RadekPilich
 // @github          https://github.com/RadekPilich
-// @include         explorer.exe
+// @include         windhawk.exe
 // @compilerOptions -luser32 -lshell32 -lpowrprof -ladvapi32 -lole32 -luuid
 // @license         MIT
 // ==/WindhawkMod==
@@ -15,6 +15,9 @@
 # Simple Scheduler
 
 A simple text based scheduler for scheduling system actions, program execution, and notifications based on time, day of the week, or specific calendar dates.
+
+This mod runs as a standalone tool within a dedicated Windhawk process, avoiding unnecessary injection into explorer.exe to maintain shell stability.
+
 
 ### --- SYNTAX GUIDE ---
 Format: `Time | Days | Action | Payload`
@@ -47,39 +50,38 @@ Format: `Time | Days | Action | Payload`
 
 // ==WindhawkModSettings==
 /*
-- Tasks: |
-    # ==================================================================
-    # Format: HH:MM | Days | Action | Payload
-    # ==================================================================
-    15:30 | Any | Notify | Test notification from Windhawk Simple Scheduler mod
+- Tasks:
+  - "15:30 | Any | Notify | Test notification from Windhawk Simple Scheduler"
   $name: Scheduled Tasks
 */
 // ==/WindhawkModSettings==
 
-#include <windows.h>
-#include <powrprof.h>
-#include <mmdeviceapi.h>
 #include <endpointvolume.h>
-#include <string>
-#include <vector>
-#include <sstream>
+#include <mmdeviceapi.h>
+#include <powrprof.h>
+#include <windows.h>
 #include <ctime>
 #include <regex>
+#include <sstream>
+#include <string>
+#include <vector>
 
-enum class Action { Hibernate, Sleep, Shutdown, Restart, SignOut, Run, Notify, ScreenOff, ScreenOn, SoundOff, SoundOn };
+enum class Action {
+    Hibernate, Sleep, Shutdown, Restart, SignOut, Run, Notify, ScreenOff, ScreenOn, SoundOff, SoundOn
+};
 
 struct Task {
     int hour;
     int minute;
-    uint8_t weekDaysMask;   
-    uint32_t monthDaysMask; 
+    uint8_t weekDaysMask;
+    uint32_t monthDaysMask;
     Action action;
     std::wstring payload;
     time_t lastExecuted;
 };
 
-struct NotifyPayload { 
-    std::wstring message; 
+struct NotifyPayload {
+    std::wstring message;
 };
 
 // --- GLOBAL STATE ---
@@ -109,7 +111,6 @@ int GetDayIndex(const std::wstring& day) {
     return -1;
 }
 
-// --- PRIVILEGES & AUDIO ---
 bool EnableShutdownPrivilege() {
     HANDLE hToken;
     TOKEN_PRIVILEGES tkp;
@@ -124,12 +125,12 @@ bool EnableShutdownPrivilege() {
 }
 
 void SetMuteState(bool mute) {
-    IMMDeviceEnumerator *deviceEnumerator = nullptr;
-    if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID *)&deviceEnumerator))) {
-        IMMDevice *defaultDevice = nullptr;
+    IMMDeviceEnumerator* deviceEnumerator = nullptr;
+    if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator))) {
+        IMMDevice* defaultDevice = nullptr;
         if (SUCCEEDED(deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice))) {
-            IAudioEndpointVolume *endpointVolume = nullptr;
-            if (SUCCEEDED(defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, nullptr, (LPVOID *)&endpointVolume))) {
+            IAudioEndpointVolume* endpointVolume = nullptr;
+            if (SUCCEEDED(defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, nullptr, (LPVOID*)&endpointVolume))) {
                 endpointVolume->SetMute(mute, nullptr);
                 endpointVolume->Release();
             }
@@ -146,7 +147,6 @@ DWORD WINAPI NotifyThread(LPVOID param) {
     return 0;
 }
 
-// --- EXECUTION LOGIC ---
 void ExecuteAction(const Task& t) {
     Wh_Log(L"Executing task: %02d:%02d", t.hour, t.minute);
     switch (t.action) {
@@ -168,12 +168,12 @@ void ExecuteAction(const Task& t) {
             if (t.payload.size() >= 4 && _wcsicmp(t.payload.c_str() + t.payload.size() - 4, L".ps1") == 0) {
                 std::wstring args = L"-WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + t.payload + L"\"";
                 ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
-            } else ShellExecuteW(nullptr, L"open", t.payload.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            } else
+                ShellExecuteW(nullptr, L"open", t.payload.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             break;
     }
 }
 
-// --- PARSING LOGIC ---
 void ParseDays(const std::wstring& daysStr, uint8_t& weekMask, uint32_t& monthMask) {
     weekMask = 0; monthMask = 0;
     std::wstringstream ss(daysStr);
@@ -182,7 +182,6 @@ void ParseDays(const std::wstring& daysStr, uint8_t& weekMask, uint32_t& monthMa
         token = Trim(token);
         if (token.empty()) continue;
         if (_wcsicmp(token.c_str(), L"Any") == 0) { weekMask = 0x7F; monthMask = 0xFFFFFFFF; return; }
-        
         size_t hyphen = token.find(L'-');
         if (hyphen != std::wstring::npos) {
             std::wstring sPart = token.substr(0, hyphen), ePart = token.substr(hyphen + 1);
@@ -210,78 +209,80 @@ void ParseDays(const std::wstring& daysStr, uint8_t& weekMask, uint32_t& monthMa
     }
 }
 
+void ParseTaskLine(const std::wstring& line) {
+    std::wstring trimmed = Trim(line);
+    if (trimmed.empty() || trimmed[0] == L'#') return;
+
+    std::wstringstream ls(trimmed);
+    std::wstring tP, dP, aP, pP;
+    if (!std::getline(ls, tP, L'|')) return;
+    if (!std::getline(ls, dP, L'|')) return;
+    if (!std::getline(ls, aP, L'|')) return;
+    std::getline(ls, pP);
+
+    Task t = {};
+    if (swscanf_s(Trim(tP).c_str(), L"%d:%d", &t.hour, &t.minute) != 2) return;
+    ParseDays(dP, t.weekDaysMask, t.monthDaysMask);
+    t.payload = Trim(pP);
+    t.lastExecuted = 0;
+
+    std::wstring act = Trim(aP);
+    if (_wcsicmp(act.c_str(), L"Hibernate") == 0) t.action = Action::Hibernate;
+    else if (_wcsicmp(act.c_str(), L"Sleep") == 0) t.action = Action::Sleep;
+    else if (_wcsicmp(act.c_str(), L"Shutdown") == 0) t.action = Action::Shutdown;
+    else if (_wcsicmp(act.c_str(), L"Restart") == 0) t.action = Action::Restart;
+    else if (_wcsicmp(act.c_str(), L"SignOut") == 0) t.action = Action::SignOut;
+    else if (_wcsicmp(act.c_str(), L"Run") == 0) t.action = Action::Run;
+    else if (_wcsicmp(act.c_str(), L"Notify") == 0) t.action = Action::Notify;
+    else if (_wcsicmp(act.c_str(), L"ScreenOff") == 0) t.action = Action::ScreenOff;
+    else if (_wcsicmp(act.c_str(), L"ScreenOn") == 0) t.action = Action::ScreenOn;
+    else if (_wcsicmp(act.c_str(), L"SoundOff") == 0) t.action = Action::SoundOff;
+    else if (_wcsicmp(act.c_str(), L"SoundOn") == 0) t.action = Action::SoundOn;
+    else return;
+
+    g_tasks.push_back(t);
+}
+
 void LoadSettings() {
     g_tasks.clear();
-    PCWSTR tasksStrRaw = Wh_GetStringSetting(L"Tasks");
-    if (!tasksStrRaw) return;
-
-    std::wstring raw(tasksStrRaw);
-    Wh_FreeStringSetting(tasksStrRaw);
-
-    // Regex pattern to recover potentially flattened strings
-    std::wregex taskStartPattern(L"(\\d{1,2}:\\d{2}\\s*\\|)");
-    std::wsregex_iterator it(raw.begin(), raw.end(), taskStartPattern);
-    std::wsregex_iterator end;
-
-    std::vector<size_t> splitPoints;
-    for (; it != end; ++it) {
-        size_t pos = it->position();
-        size_t lineStart = pos;
-        while (lineStart > 0 && raw[lineStart-1] != L'\n' && raw[lineStart-1] != L'\r') {
-            lineStart--;
+    PCWSTR firstItem = Wh_GetStringSetting(L"Tasks[0]");
+    if (firstItem && *firstItem) {
+        for (int i = 0; i < 1000; i++) {
+            WCHAR name[32]; swprintf_s(name, L"Tasks[%d]", i);
+            PCWSTR raw = (i == 0) ? firstItem : Wh_GetStringSetting(name);
+            if (!raw || !*raw) break;
+            ParseTaskLine(raw);
+            Wh_FreeStringSetting(raw);
         }
-        splitPoints.push_back(lineStart);
-    }
-    splitPoints.push_back(raw.length());
-
-    for (size_t i = 0; i < splitPoints.size() - 1; ++i) {
-        std::wstring line = raw.substr(splitPoints[i], splitPoints[i+1] - splitPoints[i]);
-        std::wstring trimmed = Trim(line);
-        
-        if (trimmed.empty() || trimmed[0] == L'#') continue;
-
-        std::wstringstream ls(trimmed);
-        std::wstring tP, dP, aP, pP;
-        if (!std::getline(ls, tP, L'|')) continue;
-        if (!std::getline(ls, dP, L'|')) continue;
-        if (!std::getline(ls, aP, L'|')) continue;
-        std::getline(ls, pP);
-
-        Task t = {};
-        if (swscanf_s(Trim(tP).c_str(), L"%d:%d", &t.hour, &t.minute) != 2) continue;
-        ParseDays(dP, t.weekDaysMask, t.monthDaysMask);
-        t.payload = Trim(pP);
-        t.lastExecuted = 0;
-
-        std::wstring act = Trim(aP);
-        if (_wcsicmp(act.c_str(), L"Hibernate") == 0) t.action = Action::Hibernate;
-        else if (_wcsicmp(act.c_str(), L"Sleep") == 0) t.action = Action::Sleep;
-        else if (_wcsicmp(act.c_str(), L"Shutdown") == 0) t.action = Action::Shutdown;
-        else if (_wcsicmp(act.c_str(), L"Restart") == 0) t.action = Action::Restart;
-        else if (_wcsicmp(act.c_str(), L"SignOut") == 0) t.action = Action::SignOut;
-        else if (_wcsicmp(act.c_str(), L"Run") == 0) t.action = Action::Run;
-        else if (_wcsicmp(act.c_str(), L"Notify") == 0) t.action = Action::Notify;
-        else if (_wcsicmp(act.c_str(), L"ScreenOff") == 0) t.action = Action::ScreenOff;
-        else if (_wcsicmp(act.c_str(), L"ScreenOn") == 0) t.action = Action::ScreenOn;
-        else if (_wcsicmp(act.c_str(), L"SoundOff") == 0) t.action = Action::SoundOff;
-        else if (_wcsicmp(act.c_str(), L"SoundOn") == 0) t.action = Action::SoundOn;
-        else continue;
-
-        g_tasks.push_back(t);
+    } else {
+        PCWSTR rawStr = Wh_GetStringSetting(L"Tasks");
+        if (rawStr) {
+            std::wstring raw(rawStr); Wh_FreeStringSetting(rawStr);
+            std::wregex pattern(L"(\\d{1,2}:\\d{2}\\s*\\|)");
+            std::wsregex_iterator it(raw.begin(), raw.end(), pattern), end;
+            std::vector<size_t> splitPoints;
+            for (; it != end; ++it) {
+                size_t lineStart = it->position();
+                while (lineStart > 0 && raw[lineStart - 1] != L'\n' && raw[lineStart - 1] != L'\r') lineStart--;
+                splitPoints.push_back(lineStart);
+            }
+            splitPoints.push_back(raw.length());
+            for (size_t i = 0; i < splitPoints.size() - 1; ++i) {
+                ParseTaskLine(raw.substr(splitPoints[i], splitPoints[i + 1] - splitPoints[i]));
+            }
+        }
     }
     Wh_Log(L"Parser: Loaded %zu active tasks.", g_tasks.size());
 }
 
-// --- THREADING ---
 DWORD WINAPI SchedulerThread(LPVOID) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    HANDLE handles[] = { g_wakeEvent, g_timer };
+    HANDLE handles[] = {g_wakeEvent, g_timer};
     while (!g_exitFlag) {
         time_t now = time(nullptr);
         time_t next_run = 0;
         std::vector<Task*> due_tasks;
         struct tm tm_now; localtime_s(&tm_now, &now);
-
         for (auto& t : g_tasks) {
             struct tm tm_t = tm_now;
             tm_t.tm_hour = t.hour; tm_t.tm_min = t.minute; tm_t.tm_sec = 0; tm_t.tm_isdst = -1;
@@ -302,9 +303,7 @@ DWORD WINAPI SchedulerThread(LPVOID) {
             }
             if (next_run == 0 || next_target < next_run) next_run = next_target;
         }
-
         for (Task* t : due_tasks) ExecuteAction(*t);
-
         if (next_run > 0) {
             LARGE_INTEGER due; due.QuadPart = (LONGLONG)next_run * 10000000LL + 116444736000000000LL;
             SetWaitableTimer(g_timer, &due, 0, nullptr, nullptr, FALSE);
@@ -321,17 +320,16 @@ static ULONG WINAPI PowerCallback(PVOID Context, ULONG Type, PVOID Setting) {
 }
 
 BOOL WhTool_ModInit() {
-    Wh_Log(L"Tool process started.");
+    Wh_Log(L"Standalone tool process started.");
     LoadSettings();
     g_wakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_timer = CreateWaitableTimerW(nullptr, TRUE, nullptr);
-    
     HMODULE hP = GetModuleHandle(L"powrprof.dll");
     if (hP) {
-        typedef HPOWERNOTIFY (WINAPI *Reg_t)(DWORD, PVOID, PHPOWERNOTIFY);
+        typedef HPOWERNOTIFY(WINAPI * Reg_t)(DWORD, PVOID, PHPOWERNOTIFY);
         auto Reg = (Reg_t)GetProcAddress(hP, "PowerRegisterSuspendResumeNotification");
         if (Reg) {
-            static struct { PVOID c; PVOID ctx; } p = { (PVOID)PowerCallback, g_wakeEvent };
+            static struct { PVOID c; PVOID ctx; } p = {(PVOID)PowerCallback, g_wakeEvent};
             HPOWERNOTIFY hn; Reg(2, &p, &hn);
         }
     }
@@ -340,74 +338,137 @@ BOOL WhTool_ModInit() {
 }
 
 void WhTool_ModSettingsChanged() { LoadSettings(); SetEvent(g_wakeEvent); }
-void WhTool_ModUninit() { g_exitFlag = true; SetEvent(g_wakeEvent); if (g_timerThread) { WaitForSingleObject(g_timerThread, INFINITE); CloseHandle(g_timerThread); } CloseHandle(g_timer); CloseHandle(g_wakeEvent); }
+void WhTool_ModUninit() {
+    g_exitFlag = true; SetEvent(g_wakeEvent);
+    if (g_timerThread) { WaitForSingleObject(g_timerThread, INFINITE); CloseHandle(g_timerThread); }
+    CloseHandle(g_timer); CloseHandle(g_wakeEvent);
+}
 
-// --- BOILERPLATE ---
+// -----------------------------------------------------------------------------
+// Replace the code below this line with the snippet from here (exact copy) for easier review:
+// https://github.com/ramensoftware/windhawk/wiki/Mods-as-tools:-Running-mods-in-a-dedicated-process
+// -----------------------------------------------------------------------------
+
 bool g_isToolModProcessLauncher;
 HANDLE g_childProcessHandle;
-void WINAPI EntryPoint_Hook() { ExitThread(0); }
+
+void WINAPI EntryPoint_Hook() {
+    ExitThread(0);
+}
 
 BOOL Wh_ModInit() {
-    int argc; LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
-    bool isToolMod = false, isCurr = false;
+    int argc;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
+
+    bool isToolMod = false;
+    bool isCurrentMod = false;
     for (int i = 0; i < argc; i++) {
         if (wcscmp(argv[i], L"-tool-mod") == 0 && i + 1 < argc) {
             isToolMod = true;
-            if (wcscmp(argv[i+1], WH_MOD_ID) == 0) isCurr = true;
+            if (wcscmp(argv[i + 1], WH_MOD_ID) == 0) {
+                isCurrentMod = true;
+            }
         }
     }
+
     LocalFree(argv);
 
-    if (isCurr) {
+    if (isCurrentMod) {
         HANDLE mutex = CreateMutex(nullptr, TRUE, L"windhawk-tool-mod_" WH_MOD_ID);
-        if (GetLastError() == ERROR_ALREADY_EXISTS) { if (mutex) CloseHandle(mutex); ExitProcess(1); }
-        if (!WhTool_ModInit()) { if (mutex) CloseHandle(mutex); ExitProcess(1); }
-        IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)GetModuleHandle(nullptr);
-        IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)((BYTE*)dos + dos->e_lfanew);
-        Wh_SetFunctionHook((BYTE*)dos + nt->OptionalHeader.AddressOfEntryPoint, (void*)EntryPoint_Hook, nullptr);
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            if (mutex) {
+                CloseHandle(mutex);
+            }
+            ExitProcess(1);
+        }
+
+        if (!WhTool_ModInit()) {
+            if (mutex) {
+                CloseHandle(mutex);
+            }
+            ExitProcess(1);
+        }
+
+        HMODULE hModule = GetModuleHandle(nullptr);
+        IMAGE_DOS_HEADER* dosHeader = (IMAGE_DOS_HEADER*)hModule;
+        IMAGE_NT_HEADERS* ntHeaders = (IMAGE_NT_HEADERS*)((BYTE*)hModule + dosHeader->e_lfanew);
+        void* entryPoint = (BYTE*)hModule + ntHeaders->OptionalHeader.AddressOfEntryPoint;
+        Wh_SetFunctionHook(entryPoint, (void*)EntryPoint_Hook, nullptr);
+
         return TRUE;
     }
-    if (isToolMod) return FALSE;
 
-    HWND hwndShell = GetShellWindow();
-    if (hwndShell) {
-        DWORD dwShellPid; GetWindowThreadProcessId(hwndShell, &dwShellPid);
-        if (GetCurrentProcessId() != dwShellPid) return FALSE;
+    if (isToolMod) {
+        return FALSE;
     }
-    g_isToolModProcessLauncher = true; 
+
+    g_isToolModProcessLauncher = true;
     return TRUE;
 }
 
 void Wh_ModAfterInit() {
-    if (!g_isToolModProcessLauncher) return;
-    WCHAR path[MAX_PATH]; GetModuleFileName(nullptr, path, MAX_PATH);
-    WCHAR cmd[MAX_PATH + 128]; swprintf_s(cmd, L"\"%s\" -tool-mod \"%s\"", path, WH_MOD_ID);
-    STARTUPINFO si = { sizeof(si) };
+    if (!g_isToolModProcessLauncher) {
+        return;
+    }
+
+    WCHAR path[MAX_PATH];
+    GetModuleFileName(nullptr, path, MAX_PATH);
+
+    WCHAR commandLine[MAX_PATH + 128];
+    swprintf_s(commandLine, L"\"%s\" -tool-mod \"%s\"", path, WH_MOD_ID);
+
+    STARTUPINFO si = {sizeof(si)};
     si.dwFlags = STARTF_FORCEOFFFEEDBACK;
     PROCESS_INFORMATION pi;
-    HMODULE hK = GetModuleHandle(L"kernelbase.dll"); if (!hK) hK = GetModuleHandle(L"kernel32.dll");
-    using CP_t = BOOL(WINAPI*)(HANDLE, LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, WINBOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION, PHANDLE);
-    auto pCP = (CP_t)GetProcAddress(hK, "CreateProcessInternalW");
+
+    HMODULE hKernelBase = GetModuleHandle(L"kernelbase.dll");
+    if (!hKernelBase) {
+        hKernelBase = GetModuleHandle(L"kernel32.dll");
+    }
+
+    using CreateProcessInternalW_t = BOOL(WINAPI*)(
+        HANDLE hUserToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
+        LPSECURITY_ATTRIBUTES lpProcessAttributes,
+        LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles,
+        DWORD dwCreationFlags, LPVOID lpEnvironment, LPCWSTR lpCurrentDirectory,
+        LPSTARTUPINFOW lpStartupInfo, LPPROCESS_INFORMATION lpProcessInformation,
+        PHANDLE hRestrictedUserToken);
+    CreateProcessInternalW_t CreateProcessInternalW_orig =
+        (CreateProcessInternalW_t)GetProcAddress(hKernelBase,
+                                                 "CreateProcessInternalW");
 
     HANDLE hJob = CreateJobObject(nullptr, nullptr);
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { { 0 } };
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {{{{0}}}};
     jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+    SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli,
+                            sizeof(jeli));
 
-    if (pCP(nullptr, path, cmd, nullptr, nullptr, FALSE, NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi, nullptr)) {
+    if (CreateProcessInternalW_orig(
+            nullptr, path, commandLine, nullptr, nullptr, FALSE,
+            NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi,
+            nullptr)) {
         AssignProcessToJobObject(hJob, pi.hProcess);
         ResumeThread(pi.hThread);
+
         g_childProcessHandle = pi.hProcess;
         CloseHandle(pi.hThread);
     }
 }
 
-void Wh_ModSettingsChanged() { if (!g_isToolModProcessLauncher) WhTool_ModSettingsChanged(); }
-void Wh_ModUninit() { 
-    if (!g_isToolModProcessLauncher) { 
-        WhTool_ModUninit(); 
-        ExitProcess(0); 
+void Wh_ModSettingsChanged() {
+    if (!g_isToolModProcessLauncher) {
+        WhTool_ModSettingsChanged();
+    }
+}
+
+void Wh_ModUninit() {
+    if (!g_isToolModProcessLauncher) {
+        WhTool_ModUninit();
+        ExitProcess(0);
     } else {
-        if (g_childProcessHandle) { TerminateProcess(g_childProcessHandle, 0); CloseHandle(g_childProcessHandle); }
+        if (g_childProcessHandle) {
+            TerminateProcess(g_childProcessHandle, 0);
+            CloseHandle(g_childProcessHandle);
+        }
     }
 }
